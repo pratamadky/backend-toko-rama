@@ -111,6 +111,10 @@ async def login(req: LoginRequest):
         if conn and conn.is_connected():
             conn.close()
 
+if __name__ == "__main__":   # ← di luar semua fungsi
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
 # ─── BARANG ───────────────────────────────────────────────────
 @app.get("/barang")
 def get_barang():
