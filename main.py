@@ -111,10 +111,6 @@ async def login(req: LoginRequest):
         if conn and conn.is_connected():
             conn.close()
 
-if __name__ == "__main__":   # ← di luar semua fungsi
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
 # ─── BARANG ───────────────────────────────────────────────────
 @app.get("/barang")
 def get_barang():
@@ -246,25 +242,13 @@ def tambah_transaksi(req: TransaksiRequest):
             conn.close()
 
 # ─── PERAMALAN: HITUNG & SIMPAN SES ──────────────────────────
-# Endpoint baru: POST /peramalan/hitung?bulan=YYYY-MM
-# Cara kerja:
-#   1. Ambil total penjualan per barang untuk bulan target
-#   2. Ambil data historis bulan-bulan sebelumnya untuk inisialisasi SES
-#   3. Hitung forecast SES dengan alpha optimal (grid search 0.1-0.9)
-#   4. Hitung MAD dan MSE dari data historis
-#   5. Simpan/update hasil ke tabel peramalan
 @app.post("/peramalan/hitung")
 def hitung_peramalan(bulan: str):
-    """
-    Hitung SES untuk semua barang pada bulan tertentu dan simpan ke tabel peramalan.
-    Gunakan ini sebelum melihat hasil peramalan atau menghitung TOPSIS.
-    """
     conn = None
     try:
         conn = get_conn()
         cursor = conn.cursor(dictionary=True)
 
-        # Ambil semua barang
         cursor.execute("SELECT kode_barang, nama_barang FROM data_barang")
         barang_list = cursor.fetchall()
 
@@ -276,7 +260,6 @@ def hitung_peramalan(bulan: str):
         for barang in barang_list:
             kode = barang['kode_barang']
 
-            # ── Ambil data penjualan historis semua bulan (urut asc) ──
             cursor.execute("""
                 SELECT 
                     DATE_FORMAT(tanggal_penjualan, '%%Y-%%m') as bln,
@@ -290,33 +273,28 @@ def hitung_peramalan(bulan: str):
             history = cursor.fetchall()
 
             if len(history) == 0:
-                # Tidak ada transaksi sama sekali, skip
                 continue
 
             aktuals = [float(h['total']) for h in history]
             bulan_list = [h['bln'] for h in history]
 
-            # Nilai aktual bulan target (0 jika belum ada transaksi bulan ini)
             if bulan_list[-1] == bulan:
                 aktual_target = aktuals[-1]
-                train_data = aktuals[:-1]  # historis tanpa bulan target
+                train_data = aktuals[:-1]
             else:
                 aktual_target = 0.0
-                train_data = aktuals  # semua historis sebagai training
+                train_data = aktuals
 
-            # ── Pilih alpha terbaik via grid search ──
             best_alpha = 0.3
             best_mse = float('inf')
 
             if len(train_data) >= 2:
-                for alpha_candidate in [i / 10 for i in range(1, 10)]:  # 0.1 ~ 0.9
+                for alpha_candidate in [i / 10 for i in range(1, 10)]:
                     f = train_data[0]
                     errors_sq = []
-                    errors_abs = []
                     for i in range(1, len(train_data)):
                         e = train_data[i] - f
                         errors_sq.append(e ** 2)
-                        errors_abs.append(abs(e))
                         f = alpha_candidate * train_data[i] + (1 - alpha_candidate) * f
                     if errors_sq:
                         mse_candidate = sum(errors_sq) / len(errors_sq)
@@ -326,9 +304,7 @@ def hitung_peramalan(bulan: str):
 
             alpha = best_alpha
 
-            # ── Hitung SES dengan alpha terbaik ──
             if len(train_data) == 0:
-                # Hanya ada 1 data (bulan target itu sendiri)
                 forecast = aktual_target
                 mad = 0.0
                 mse_val = 0.0
@@ -337,7 +313,6 @@ def hitung_peramalan(bulan: str):
                 mad = abs(aktual_target - forecast) if aktual_target > 0 else 0.0
                 mse_val = mad ** 2
             else:
-                # Jalankan SES pada train_data
                 f = train_data[0]
                 errors_sq = []
                 errors_abs = []
@@ -346,10 +321,7 @@ def hitung_peramalan(bulan: str):
                     errors_sq.append(e ** 2)
                     errors_abs.append(abs(e))
                     f = alpha * train_data[i] + (1 - alpha) * f
-
-                # f sekarang adalah forecast untuk periode berikutnya
                 forecast = alpha * train_data[-1] + (1 - alpha) * f
-
                 mad = sum(errors_abs) / len(errors_abs) if errors_abs else 0.0
                 mse_val = sum(errors_sq) / len(errors_sq) if errors_sq else 0.0
 
@@ -357,7 +329,6 @@ def hitung_peramalan(bulan: str):
             mad = round(mad, 4)
             mse_val = round(mse_val, 4)
 
-            # ── Simpan atau update ke tabel peramalan ──
             cursor.execute("""
                 SELECT id_peramalan FROM peramalan 
                 WHERE kode_barang = %s AND bulan = %s
@@ -394,7 +365,7 @@ def hitung_peramalan(bulan: str):
         if not hasil:
             raise HTTPException(
                 status_code=404,
-                detail="Tidak ada data transaksi untuk dihitung. Pastikan ada transaksi terlebih dahulu."
+                detail="Tidak ada data transaksi untuk dihitung."
             )
 
         return {
@@ -532,7 +503,7 @@ def hitung_topsis(bulan: str):
         cursor.execute("SELECT * FROM pengaturan_bobot ORDER BY id_bobot DESC LIMIT 1")
         bobot = cursor.fetchone()
         if not bobot:
-            raise HTTPException(status_code=404, detail="Bobot belum diatur. Atur bobot terlebih dahulu.")
+            raise HTTPException(status_code=404, detail="Bobot belum diatur.")
         w = [bobot['bobot_c1'], bobot['bobot_c2'],
              bobot['bobot_c3'], bobot['bobot_c4']]
         cursor.execute("""
@@ -587,6 +558,3 @@ def hitung_topsis(bulan: str):
     finally:
         if conn and conn.is_connected():
             conn.close()
-            if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
